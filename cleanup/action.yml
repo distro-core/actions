@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: MIT
+
+name: Distro Core Cleanup
+author: Michael Mitchell <124963+mmitchel@users.noreply.github.com>
+description: >-
+  Action to perform a cleanup based upon supplied parameters.
+
+branding:
+  icon: activity
+  color: red
+
+########################################################################
+
+inputs:
+  paths:
+    description: cleanup paths
+    required: true
+
+########################################################################
+
+runs:
+  using: composite
+  steps:
+  - id: environment
+    shell: bash
+    run: |
+      : environment based on runtime
+  - id: install-github-hosted
+    if: runner.environment == 'github-hosted'
+    shell: bash
+    run: |
+      : install github-hosted
+  - id: install-self-hosted
+    if: runner.environment == 'self-hosted'
+    shell: bash
+    run: |
+      : install self-hosted
+  - id: configure
+    shell: bash
+    run: |
+      : configure
+  - id: execute
+    env:
+      PATHS: ${{ inputs.paths }}
+    shell: bash
+    run: |
+      : execute
+      for path in $PATHS ; do
+          rm -fr $path || true
+      done
+  - id: gen-outputs
+    shell: bash
+    run: |
+      : generate outputs
+  - id: gen-summary
+    if: always()
+    env:
+      DIRS: ${{ inputs.paths }}
+    shell: bash
+    run: |
+      : generate summary
+      cat <<EOF >>$GITHUB_STEP_SUMMARY
+      #### Clean Up
+      Paths
+      ~~~ text
+      $(printf "%s\n" $DIRS)
+      ~~~
+      EOF
