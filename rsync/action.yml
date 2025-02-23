@@ -1,0 +1,121 @@
+# SPDX-License-Identifier: MIT
+
+name: Sync rsync
+description: >-
+  Action to perform rsync sync based upon supplied inputs.
+
+branding:
+  icon: activity
+  color: red
+
+########################################################################
+
+# Workflow input variables comprised from actual action parameters.
+
+inputs:
+  src_dir:
+    description: source directory path
+    required: true
+  dst_dir:
+    description: destination directory path
+    required: true
+  expiry_days:
+    description: expiry
+    required: false
+
+# Workflow output variables comprised from actual bitbake outputs.
+
+outputs:
+  src_dir:
+    description: source directory path
+    value: ${{ steps.gen-outputs.outputs.src_dir }}
+  dst_dir:
+    description: destination directory path
+    value: ${{ steps.gen-outputs.outputs.dst_dir }}
+
+########################################################################
+
+runs:
+  using: composite
+  steps:
+
+  - name: Environment
+    id: environment
+    shell: bash
+    run: |
+      : environment based on runtime
+
+  - name: Install GitHub Hosted
+    id: install-github-hosted
+    if: runner.environment == 'github-hosted'
+    shell: bash
+    run: |
+      : install github-hosted
+
+  - name: Install Self Hosted
+    id: install-self-hosted
+    if: runner.environment == 'self-hosted'
+    shell: bash
+    run: |
+      : install self-hosted
+
+  - name: Configure
+    id: configure
+    shell: bash
+    run: |
+      : configure
+
+  - name: Execute
+    id: execute
+    shell: bash
+    env:
+      SRC_DIR: ${{ inputs.src_dir }}
+      DST_DIR: ${{ inputs.dst_dir }}
+    run: |
+      : execute
+      src_dir=$([[ -n "$SRC_DIR" && -d "$SRC_DIR" ]] && echo "$SRC_DIR" || echo "")
+      dst_dir=$([[ -n "$DST_DIR" && -d "$DST_DIR" ]] && echo "$DST_DIR" || echo "")
+      dst_dir_fstype=$(df -TP "$DST_DIR" | tail -n -1 | awk '{print $2}' | grep -E 'cifs|nfs' || echo "")
+      if [[ -n "$src_dir" && -n "$dst_dir" && -n "$dst_dir_fstype" ]] ; then
+        rsync -ah $DELETE_REMOVED --no-links --no-owner --no-group --no-acls --times --atimes --no-devices --no-specials --ignore-existing --prune-empty-dirs --info skip0,stats2 \
+          --exclude 'git2/' --exclude '*.done' --exclude '*.lock' --exclude 'tmp*' --exclude '*tmp' \
+          $src_dir/ $dst_dir/ | tee $GITHUB_WORKSPACE/rsync.log
+        find $src_dir -type f | sed -e "s,$src_dir,,g" | xargs -I{} touch --no-create --reference $src_dir{} $dst_dir{}
+      fi
+
+  - name: Generate Outputs
+    id: gen-outputs
+    shell: bash
+    env:
+      SRC_DIR: ${{ inputs.src_dir }}
+      DST_DIR: ${{ inputs.dst_dir }}
+    run: |
+      : generate outputs
+      src_dir=$([[ -n "$SRC_DIR" && -d "$SRC_DIR" ]] && echo "$SRC_DIR" || echo "")
+      dst_dir=$([[ -n "$DST_DIR" && -d "$DST_DIR" ]] && echo "$DST_DIR" || echo "")
+      echo "src_dir=$src_dir" >>$GITHUB_OUTPUT
+      echo "dst_dir=$dst_dir" >>$GITHUB_OUTPUT
+
+  - name: Generate Summary
+    id: gen-summary
+    shell: bash
+    env:
+      SRC_DIR: ${{ steps.gen-outputs.outputs.src_dir }}
+      DST_DIR: ${{ steps.gen-outputs.outputs.dst_dir }}
+    run: |
+      : generate summary
+      cat <<EOF >>$GITHUB_STEP_SUMMARY
+      #### ${{ github.action }} ${{ github.action_status }}
+      Paths
+      ~~~ text
+      src_dir: $SRC_DIR
+      $(df -TPh "$SRC_DIR" | tail -n 1  | tr -s " " || echo "none")
+      dst_dir: $DST_DIR
+      $(df -TPh "$DST_DIR" | tail -n 1  | tr -s " " || echo "none")
+      ~~~
+      Statistics
+      ~~~ text
+      $(cat $GITHUB_WORKSPACE/rsync.log | tail -n 16)
+      ~~~
+      EOF
+      rm -f $GITHUB_WORKSPACE/rsync.log

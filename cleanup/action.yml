@@ -1,0 +1,82 @@
+# SPDX-License-Identifier: MIT
+
+name: Distro Core Cleanup
+description: >-
+  Action to perform a cleanup based upon supplied parameters.
+
+branding:
+  icon: activity
+  color: red
+
+########################################################################
+
+# Workflow input variables comprised from actual action parameters.
+
+inputs:
+  paths:
+    description: cleanup paths
+    required: true
+
+########################################################################
+
+runs:
+  using: composite
+  steps:
+
+  - name: Environment
+    id: environment
+    shell: bash
+    run: |
+      : environment based on runtime
+
+  - name: Install GitHub Hosted
+    id: install-github-hosted
+    if: runner.environment == 'github-hosted'
+    shell: bash
+    run: |
+      : install github-hosted
+
+  - name: Install Self Hosted
+    id: install-self-hosted
+    if: runner.environment == 'self-hosted'
+    shell: bash
+    run: |
+      : install self-hosted
+
+  - name: Configure
+    id: configure
+    shell: bash
+    run: |
+      : configure
+
+  - name: Execute
+    id: execute
+    env:
+      PATHS: ${{ inputs.paths }}
+    shell: bash
+    run: |
+      : execute
+      for path in $PATHS ; do
+          rm -fr $path || true
+      done
+
+  - name: Generate Outputs
+    id: gen-outputs
+    shell: bash
+    run: |
+      : generate outputs
+
+  - name: Generate Summary
+    id: gen-summary
+    env:
+      DIRS: ${{ inputs.paths }}
+    shell: bash
+    run: |
+      : generate summary
+      cat <<EOF >>$GITHUB_STEP_SUMMARY
+      #### Clean Up
+      Paths
+      ~~~ text
+      $(printf "%s\n" $DIRS)
+      ~~~
+      EOF

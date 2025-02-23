@@ -1,0 +1,218 @@
+# SPDX-License-Identifier: MIT
+
+name: DISTRO Core Runner
+description: >-
+  Action to perform runner init based upon supplied parameters.
+
+branding:
+  icon: activity
+  color: red
+
+########################################################################
+
+# Workflow input variables comprised from actual action parameters.
+
+inputs:
+  mnt_deploy_dir:
+    description: >-
+      runner local path DEPLOY_DIR
+    default: ''
+  mnt_dl_dir:
+    description: >-
+      runner local path DL_DIR
+    default: ''
+  mnt_sstate_dir:
+    description: >-
+      runner local path SSTATE_DIR
+    default: ''
+
+# Workflow output variables comprised from actual bitbake outputs.
+
+outputs:
+  runs-on:
+    description: runner name
+    value: ${{ steps.gen-outputs.outputs.runs-on }}
+  runner-environment:
+    description: runner [ github-hosted, self-hosted ]
+    value: ${{ steps.gen-outputs.outputs.runner-environment }}
+  runner-os:
+    description: runner os [ linux ]
+    value: ${{ steps.gen-outputs.outputs.runner-os }}
+  runner-arch:
+    description: runner cpu architecture
+    value: ${{ steps.gen-outputs.outputs.runner-arch }}
+  build-number:
+    description: runner build number
+    value: ${{ steps.gen-outputs.outputs.build-number }}
+  mnt_deploy_dir:
+    description: runner has detected path at mnt_deploy_dir
+    value: ${{ steps.gen-outputs.outputs.mnt_deploy_dir }}
+  mnt_dl_dir:
+    description: runner has detected path at mnt_dl_dir
+    value: ${{ steps.gen-outputs.outputs.mnt_dl_dir }}
+  mnt_sstate_dir:
+    description: runner has detected path at mnt_sstate_dir
+    value: ${{ steps.gen-outputs.outputs.mnt_sstate_dir }}
+
+########################################################################
+
+runs:
+  using: composite
+  steps:
+
+  - name: Environment
+    id: environment
+    shell: bash
+    run: |
+      : environment based on runtime
+      echo "$HOME/.local/bin" >>$GITHUB_PATH
+
+  - name: Install GitHub Hosted
+    id: install-github-hosted
+    if: runner.environment == 'github-hosted'
+    shell: bash
+    run: |
+      : install github-hosted
+      . /etc/os-release
+      case $ID in
+      ubuntu )
+        sudo DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get -y -qq update
+        sudo DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get -y -qq install \
+          build-essential chrpath cpio debianutils diffstat file gawk gcc git iputils-ping libacl1 \
+          liblz4-tool locales python3 python3-git python3-jinja2 python3-pexpect python3-pip \
+          python3-subunit socat texinfo unzip wget xz-utils zstd
+        : install tools
+        sudo DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get -y -qq install \
+          liblz4-tool file locales libacl1 git-lfs make libxml2-utils s3cmd python3-websockets time \
+          jq cifs-utils rsync curl
+        : setup locale
+        sudo /usr/bin/bash -c "echo 'en_US.UTF-8 UTF-8' >/etc/locale.gen"
+        sudo /usr/sbin/locale-gen
+        ;;
+      * )
+        exit 1
+        ;;
+      esac
+      : allow user namespaces
+      sudo /usr/sbin/sysctl kernel.apparmor_restrict_unprivileged_userns=0 || true
+      : extra swap
+      # swapfile=/swapfile
+      # sudo /usr/bin/dd if=/dev/zero of=$swapfile bs=1G count=$(( $(free --giga -w | grep Mem: | tr -s ' ' | cut -d ' ' -f 2) / 2 ))
+      # sudo /usr/bin/chmod 600 $swapfile
+      # sudo /usr/sbin/mkswap $swapfile
+      # sudo /usr/sbin/swapon $swapfile
+      : repo tool
+      curl -s https://storage.googleapis.com/git-repo-downloads/repo >$RUNNER_TEMP/repo
+      install -D -m 755 $RUNNER_TEMP/repo $HOME/.local/bin/repo
+      repo --version
+
+  - name: Install Self Hosted
+    id: install-self-hosted
+    if: runner.environment == 'self-hosted'
+    shell: bash
+    run: |
+      : install self-hosted
+      : install tools
+      # preconfigure self-hosted runner
+      : setup locale
+      if [[ -z "$(locale -a | grep en_US.utf8)" ]] ; then
+        echo "::error::bitbake requires locale en_US.utf8"
+      exit 1
+      fi
+      : allow user namespaces
+      if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns && "0" != $(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns) ]] ; then
+        echo "::error::bitbake requires unprivilgeged userns"
+        exit 1
+      fi
+      : extra swap
+      # preconfigure self-hosted runner
+      : repo tool
+      curl -s https://storage.googleapis.com/git-repo-downloads/repo >$RUNNER_TEMP/repo
+      install -D -m 755 $RUNNER_TEMP/repo $HOME/.local/bin/repo
+      repo --version
+
+  - name: Configure
+    id: configure
+    shell: bash
+    run: |
+      : configure
+      git config --global user.name "Actions Runner" || true
+      git config --global user.email "runner@localhost" || true
+      git config --global init.defaultBranch main || true
+      if [ -n "$(command -v docker)" ]; then
+        echo "docker is installed"
+      fi
+
+  - name: Execute
+    id: execute
+    shell: bash
+    run: |
+      : execute
+
+  - name: Generate Outputs
+    id: gen-outputs
+    shell: bash
+    run: |
+      : generate outputs
+      : assign outputs.runs-on to label matching runner.name for self-hosted
+      echo "runs-on=$RUNNER_NAME" >>$GITHUB_OUTPUT
+      echo "runner-environment=$RUNNER_ENVIRONMENT" >>$GITHUB_OUTPUT
+      echo "runner-os=$RUNNER_OS" >>$GITHUB_OUTPUT
+      echo "runner-arch=$RUNNER_ARCH" >>$GITHUB_OUTPUT
+      echo "build-number=$(( ${{ github.run_number }} + ${{ github.run_attempt }} ))" >>$GITHUB_OUTPUT
+      : reference path for autofs mounts to initialize
+      df -TPh ${{ inputs.mnt_deploy_dir }}/ ${{ inputs.mnt_dl_dir }}/ ${{ inputs.mnt_sstate_dir }}/ >/dev/null || true
+      # set output based on existence
+      if [[ -n "${{ inputs.mnt_deploy_dir }}" && -d "${{ inputs.mnt_deploy_dir }}" ]] ; then
+        mnt_deploy_dir=$(df -TP ${{ inputs.mnt_deploy_dir }} | tail -n -1 | grep -E '(cifs|nfs)' | awk '{print $7}' || echo '')
+      fi
+      echo "mnt_deploy_dir=$mnt_deploy_dir" >>$GITHUB_OUTPUT
+      # set output based on existence
+      if [[ -n "${{ inputs.mnt_dl_dir }}" && -d "${{ inputs.mnt_dl_dir }}" ]] ; then
+        mnt_dl_dir=$(df -TP ${{ inputs.mnt_dl_dir }} | tail -n -1 | grep -E '(cifs|nfs)' | awk '{print $7}' || echo '')
+      fi
+      echo "mnt_dl_dir=$mnt_dl_dir" >>$GITHUB_OUTPUT
+      # set output based on existence
+      if [[ -n "${{ inputs.mnt_sstate_dir }}" && -d "${{ inputs.mnt_sstate_dir }}" ]] ; then
+        mnt_sstate_dir=$(df -TP ${{ inputs.mnt_sstate_dir }} | tail -n -1 | grep -E '(cifs|nfs)' | awk '{print $7}' || echo '')
+      fi
+      echo "mnt_sstate_dir=$mnt_sstate_dir" >>$GITHUB_OUTPUT
+
+  - name: Generate Summary
+    id: gen-summary
+    shell: bash
+    run: |
+      : generate summary
+      cat <<EOF >>$GITHUB_STEP_SUMMARY
+      #### Runner
+      Host
+      ~~~ text
+      RUNNER_ENVIRONMENT: ${{ steps.gen-outputs.outputs.runner-environment }}
+      RUNNER_OS: ${{ steps.gen-outputs.outputs.runner-os }}
+      RUNNER_ARCH: ${{ steps.gen-outputs.outputs.runner-arch }}
+      RUNNER_NAME: ${{ steps.gen-outputs.outputs.runs-on }}
+      NPROC: $(nproc)
+      BUILD_NUMBER: ${{ steps.gen-outputs.outputs.build-number }}
+      ~~~
+      OS Release
+      ~~~ text
+      $(cat /etc/os-release)
+      ~~~
+      Resources
+      ~~~ text
+      $(free -hlt --giga)
+
+      $(df -TPh)
+      ~~~
+      Configuration
+      ~~~ text
+      GIT:
+      $(git config --list --show-origin)
+      ~~~
+      Paths
+      ~~~ text
+      MNT_DEPLOY_DIR: ${{ steps.gen-outputs.outputs.mnt_deploy_dir }}
+      MNT_DL_DIR: ${{ steps.gen-outputs.outputs.mnt_dl_dir }}
+      MNT_SSTATE_DIR: ${{ steps.gen-outputs.outputs.mnt_sstate_dir }}
+      ~~~
+      EOF

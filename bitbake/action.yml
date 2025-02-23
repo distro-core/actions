@@ -1,0 +1,221 @@
+# SPDX-License-Identifier: MIT
+
+name: DISTRO Core Bitbake
+description: >-
+  Action to perform a bitbake based upon supplied parameters. The
+  env context supplies the parameters for the bitbake process.
+
+branding:
+  icon: activity
+  color: red
+
+########################################################################
+
+# Workflow environment initial state. The environment is utilized to
+# setup values used by job steps.
+
+# env:
+#   REPO_MANIFEST_URL: <repo_manifest_url>
+#   REPO_MANIFEST_NAME: <repo_manifest_xml>
+#   REPO_MANIFEST_REF: <repo_manifest_branch/tag/commit-id>
+#   DISTRO: distro-core
+#   MACHINE: com-cexpress-bt
+#   TARGETS: <bitbake_command_line_target_list>
+#   TARGETS_FLAGS: <bitbake_command_line_targets_flags>
+
+# Workflow output variables comprised from actual bitbake outputs.
+
+outputs:
+  targets:
+    description: >-
+      bitbake targets list
+    value: ${{ steps.gen-outputs.outputs.targets }}
+  deploy_dir:
+    description: >-
+      bitbake variable DEPLOY_DIR
+      https://docs.yoctoproject.org/ref-manual/variables.html#term-DEPLOY_DIR
+    value: ${{ steps.gen-outputs.outputs.deploy_dir }}
+  distro_codename:
+    description: >-
+      bitbake variable DISTRO_CODENAME
+      https://docs.yoctoproject.org/ref-manual/variables.html#term-DISTRO_CODENAME
+    value: ${{ steps.gen-outputs.outputs.distro_codename }}
+  cache:
+    description: >-
+      bitbake path CACHE
+      https://docs.yoctoproject.org/ref-manual/variables.html#term-CACHE
+    value: ${{ steps.gen-outputs.outputs.cache }}
+  dl_dir:
+    description: >-
+      bitbake path DL_DIR
+      https://docs.yoctoproject.org/ref-manual/variables.html#term-DL_DIR
+    value: ${{ steps.gen-outputs.outputs.dl_dir }}
+  sstate_dir:
+    description: >-
+      bitbake path SSTATE_DIR
+      https://docs.yoctoproject.org/ref-manual/variables.html#term-SSTATE_DIR
+    value: ${{ steps.gen-outputs.outputs.sstate_dir }}
+  tmpdir:
+    description: >-
+      bitbake path TMPDIR
+      https://docs.yoctoproject.org/ref-manual/variables.html#term-TMPDIR
+    value: ${{ steps.gen-outputs.outputs.tmpdir }}
+  topdir:
+    description: >-
+      bitbake path TOPDIR
+      https://docs.yoctoproject.org/ref-manual/variables.html#term-TOPDIR
+    value: ${{ steps.gen-outputs.outputs.topdir }}
+  build:
+    description: >-
+      bitbake bblayers configuration from bitbake.log
+    value: ${{ steps.gen-outputs.outputs.build }}
+  error:
+    description: >-
+      bitbake error output from bitbake-error.log, limited size
+    value: ${{ steps.gen-outputs.outputs.error }}
+  warn:
+    description: >-
+      bitbake warning output from bitbake-warn.log, limited size
+    value: ${{ steps.gen-outputs.outputs.warn }}
+
+########################################################################
+
+runs:
+  using: composite
+  steps:
+
+  - name: Environment
+    id: environment
+    shell: bash
+    run: |
+      : environment based on runtime
+
+  - name: Install GitHub Hosted
+    id: install-github-hosted
+    if: runner.environment == 'github-hosted'
+    shell: bash
+    run: |
+      : install github-hosted
+
+  - name: Install Self Hosted
+    id: install-self-hosted
+    if: runner.environment == 'self-hosted'
+    shell: bash
+    run: |
+      : install self-hosted
+
+  - name: Configure
+    id: configure
+    shell: bash
+    run: |
+      : configure
+
+  - name: Execute
+    id: execute
+    shell: bash
+    run: |
+      : execute
+      rm -fr build/conf
+      # initialize bitbake build folder
+      { TEMPLATECONF=$(pwd)/layers/meta-distro/conf/templates/$DISTRO
+      source layers/meta-distro/scripts/oe-init-build-env build
+      } >/dev/null
+      : create output vars from bitbake for gen-outputs
+      echo "TARGETS_WITH_FLAGS=$TARGETS $TARGETS_FLAGS $EXTRA_TARGETS_FLAGS" >>$GITHUB_OUTPUT
+      for var in OVERRIDES CACHE CVE_CHECK_SUMMARY_FILE DEPLOY_DIR DISTRO_CODENAME DL_DIR SSTATE_DIR TMPDIR TOPDIR ; do
+        rm -f *.lock *.sock
+        sleep 1
+        val="$(bitbake-getvar --quiet --value $var 2>/dev/null || echo '')"
+        echo "$var=$val"
+        echo "$var=$val" >>$GITHUB_OUTPUT
+      done
+      : execute bitbake for each target
+      rm -f *.log
+      for target in $TARGETS ; do
+        echo "::group::bitbake $target $TARGETS_FLAGS $EXTRA_TARGETS_FLAGS"
+        rm -f *.lock *.sock
+        sleep 1
+        rc=0
+        bitbake $target $TARGETS_FLAGS $EXTRA_TARGETS_FLAGS || bitbake_rc=$?
+        echo "bitbake rc=$rc"
+        # rc=0
+        # sstate-cache-management.py --yes --verbose --remove-duplicated --remove-orphans || rc=$?
+        # echo "sstate-cache-management.py rc=$rc"
+        echo "::endgroup::"
+      done
+
+  - name: Generate Outputs
+    id: gen-outputs
+    shell: bash
+    env:
+      TARGETS: ${{ inputs.TARGETS }}
+    run: |
+      : generate outputs
+      TARGETS_WITH_FLAGS="${{ steps.execute.outputs.TARGETS_WITH_FLAGS != '' && steps.execute.outputs.TARGETS_WITH_FLAGS || '' }}"
+      CACHE="${{ steps.execute.outputs.CACHE != '' && steps.execute.outputs.CACHE || '' }}"
+      CVE_CHECK_SUMMARY_FILE="${{ steps.execute.outputs.CVE_CHECK_SUMMARY_FILE != '' && steps.execute.outputs.CVE_CHECK_SUMMARY_FILE || '' }}"
+      DEPLOY_DIR="${{ steps.execute.outputs.DEPLOY_DIR != '' && steps.execute.outputs.DEPLOY_DIR || '' }}"
+      DISTRO_CODENAME="${{ steps.execute.outputs.DISTRO_CODENAME != '' && steps.execute.outputs.DISTRO_CODENAME || '' }}"
+      DL_DIR="${{ steps.execute.outputs.DL_DIR != '' && steps.execute.outputs.DL_DIR || '' }}"
+      SSTATE_DIR="${{ steps.execute.outputs.SSTATE_DIR != '' && steps.execute.outputs.SSTATE_DIR || '' }}"
+      TMPDIR="${{ steps.execute.outputs.TMPDIR != '' && steps.execute.outputs.TMPDIR || '' }}"
+      TOPDIR="${{ steps.execute.outputs.TOPDIR != '' && steps.execute.outputs.TOPDIR || '' }}"
+      # initialize outputs
+      echo "targets=$TARGETS_WITH_FLAGS" >>$GITHUB_OUTPUT
+      echo "cache=$CACHE" >>$GITHUB_OUTPUT
+      echo "deploy_dir=$DEPLOY_DIR" >>$GITHUB_OUTPUT
+      echo "distro_codename=${{ steps.execute.outputs.DISTRO_CODENAME }}" >>$GITHUB_OUTPUT
+      echo "cve_check_summary_file=$CVE_CHECK_SUMMARY_FILE" >>$GITHUB_OUTPUT
+      echo "dl_dir=$DL_DIR" >>$GITHUB_OUTPUT
+      echo "sstate_dir=$SSTATE_DIR" >>$GITHUB_OUTPUT
+      echo "tmpdir=$TMPDIR" >>$GITHUB_OUTPUT
+      echo "topdir=$TOPDIR" >>$GITHUB_OUTPUT
+      printf "build<<EOF\n%s\nEOF\n" "$(sed -n '/^Build Configuration:/,/^$/p' $TOPDIR/bitbake.log | tail -n +2 || echo '')" >>$GITHUB_OUTPUT
+      printf "error<<EOF\n%s\nEOF\n" "$(cat $TOPDIR/bitbake-error.log | head || echo '')" >>$GITHUB_OUTPUT
+      printf "warn<<EOF\n%s\nEOF\n" "$(cat $TOPDIR/bitbake-warn.log | head || echo '')" >>$GITHUB_OUTPUT
+
+  - name: Generate Summary
+    id: gen-summary
+    shell: bash
+    env:
+      TARGETS: ${{ inputs.TARGETS }}
+    run: |
+      : generate summary
+      CVE_CHECK_SUMMARY_FILE=$(realpath --relative-base=$GITHUB_WORKSPACE ${{ steps.gen-outputs.outputs.cve_check_summary_file }} || echo '')
+      CACHE=$(realpath --relative-base=$GITHUB_WORKSPACE ${{ steps.gen-outputs.outputs.cache }} || echo '')
+      DEPLOY_DIR=$(realpath --relative-base=$GITHUB_WORKSPACE ${{ steps.gen-outputs.outputs.deploy_dir }} || echo '')
+      DL_DIR=$(realpath --relative-base=$GITHUB_WORKSPACE ${{ steps.gen-outputs.outputs.dl_dir }} || echo '')
+      SSTATE_DIR=$(realpath --relative-base=$GITHUB_WORKSPACE ${{ steps.gen-outputs.outputs.sstate_dir }} || echo '')
+      TMPDIR=$(realpath --relative-base=$GITHUB_WORKSPACE ${{ steps.gen-outputs.outputs.tmpdir }} || echo '')
+      TOPDIR=$(realpath --relative-base=$GITHUB_WORKSPACE ${{ steps.gen-outputs.outputs.topdir }} || echo '')
+      cat <<EOF >>$GITHUB_STEP_SUMMARY
+      #### Bitbake DISTRO=$DISTRO MACHINE=$MACHINE
+      Configuration ${{ steps.gen-outputs.outputs.distro_codename }} ${{ steps.gen-outputs.outputs.targets }} ${{ steps.execute.outcome }}
+      ~~~ text
+      ${{ steps.gen-outputs.outputs.build }}
+      ~~~
+      Errors
+      ~~~ text
+      ${{ steps.gen-outputs.outputs.error }}
+      ~~~
+      Warnings
+      ~~~ text
+      ${{ steps.gen-outputs.outputs.warn }}
+      ~~~
+      Paths
+      ~~~ text
+      CVE_CHECK_SUMMARY_FILE: $CVE_CHECK_SUMMARY_FILE
+      CACHE: $CACHE
+      $(df -TPh $CACHE | tail -n 1  | tr -s ' ' || echo 'none')
+      DEPLOY_DIR: $DEPLOY_DIR
+      $(df -TPh $DEPLOY_DIR | tail -n 1  | tr -s ' ' || echo 'none')
+      DL_DIR: $DL_DIR
+      $(df -TPh $DL_DIR | tail -n 1  | tr -s ' ' || echo 'none')
+      SSTATE_DIR: $SSTATE_DIR
+      $(df -TPh $SSTATE_DIR | tail -n 1  | tr -s ' ' || echo 'none')
+      TMPDIR: $TMPDIR
+      $(df -TPh $TMPDIR | tail -n 1  | tr -s ' ' || echo 'none')
+      TOPDIR: $TOPDIR
+      $(df -TPh $TOPDIR | tail -n 1  | tr -s ' ' || echo 'none')
+      ~~~
+      EOF

@@ -1,0 +1,164 @@
+# SPDX-License-Identifier: MIT
+
+name: Sync s3cmd
+description: >-
+  Action to perform s3cmd sync based upon supplied inputs.
+
+branding:
+  icon: activity
+  color: red
+
+########################################################################
+
+# Workflow input variables comprised from actual action parameters.
+
+inputs:
+  src_dir:
+    description: source directory path
+    required: true
+  dst_dir:
+    description: destination bucket
+    required: true
+  expiry_days:
+    description: expiry
+    required: false
+  AWS_ENDPOINT_URL:
+    description: Secret, S3 DNS Endpoint
+    required: true
+  AWS_ACCESS_KEY_ID:
+    description: Secret, S3 Access Key ID
+    required: true
+  AWS_SECRET_ACCESS_KEY:
+    description: Secret, S3 Secret Access Key
+    required: true
+
+# Workflow output variables comprised from actual bitbake outputs.
+
+outputs:
+  src_dir:
+    description: source directory path
+    value: ${{ steps.gen-outputs.outputs.src_dir }}
+  dst_dir:
+    description: destination bucket
+    value: ${{ steps.gen-outputs.outputs.dst_dir }}
+
+########################################################################
+
+runs:
+  using: composite
+  steps:
+
+  - name: Environment
+    id: environment
+    shell: bash
+    run: |
+      : environment based on runtime
+
+  - name: Install GitHub Hosted
+    id: install-github-hosted
+    if: runner.environment == 'github-hosted'
+    shell: bash
+    run: |
+      : install github-hosted
+
+  - name: Install Self Hosted
+    id: install-self-hosted
+    if: runner.environment == 'self-hosted'
+    shell: bash
+    run: |
+      : install self-hosted
+
+  - name: Configure
+    id: configure
+    env:
+      AWS_ENDPOINT_URL: ${{ inputs.AWS_ENDPOINT_URL }}
+      AWS_ACCESS_KEY_ID: ${{ inputs.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ inputs.AWS_SECRET_ACCESS_KEY }}
+    shell: bash
+    run: |
+      : configure
+      printf "%s\n%s\n\n%s\n%s\n%s\n\n\n\n\ny\n" \
+        "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" "$AWS_ENDPOINT_URL" "%(bucket)s.$AWS_ENDPOINT_URL" "encrypted" \
+        | s3cmd --config $GITHUB_WORKSPACE/.s3cfg --configure
+
+  - name: Configure bucket
+    id: configure-bucket
+    if: inputs.expiry_days != ''
+    shell: bash
+    env:
+      SRC_DIR: ${{ inputs.src_dir && inputs.src_dir || '' }}
+      DST_DIR: ${{ inputs.dst_dir && inputs.dst_dir || '' }}
+      EXPIRY: ${{ inputs.expiry_days }}
+    run: |
+      : configure-bucket
+      if ! s3cmd --config $GITHUB_WORKSPACE/.s3cfg ls $DST_DIR ; then
+        s3cmd --config $GITHUB_WORKSPACE/.s3cfg mb $DST_DIR
+        if [[ -n "$EXPIRY" ]] ; then
+          cat >$GITHUB_WORKSPACE/lifecycle.xml <<EOF
+      <?xml version="1.0" ?>
+      <LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+        <Rule>
+          <ID>Prune files after $EXPIRY days</ID>
+          <Prefix>/</Prefix>
+          <Status>Enabled</Status>
+          <Expiration>
+            <Days>$EXPIRY</Days>
+          </Expiration>
+        </Rule>
+      </LifecycleConfiguration>
+      EOF
+          s3cmd --config $GITHUB_WORKSPACE/.s3cfg setlifecycle $GITHUB_WORKSPACE/lifecycle.xml $DST_DIR
+          rm -f $GITHUB_WORKSPACE/lifecycle.xml
+        fi
+      fi
+
+  - name: Execute
+    id: execute
+    shell: bash
+    env:
+      SRC_DIR: ${{ inputs.src_dir && inputs.src_dir || '' }}
+      DST_DIR: ${{ inputs.dst_dir && inputs.dst_dir || '' }}
+    run: |
+      : execute
+      if [[ -n "$SRC_DIR" && -n "$DST_DIR" ]] ; then
+        s3cmd --config $GITHUB_WORKSPACE/.s3cfg \
+          sync --recursive --acl-public --preserve $DELETE_REMOVED --progress \
+          --exclude 'git2/' --exclude '*.done' --exclude '*.lock' --exclude 'tmp*' --exclude '*tmp' \
+          $SRC_DIR/ $DST_DIR/ | tee $GITHUB_WORKSPACE/s3cmd.log
+      fi
+      rm -f $GITHUB_WORKSPACE/.s3cfg
+
+  - name: Generate Outputs
+    id: gen-outputs
+    shell: bash
+    env:
+      SRC_DIR: ${{ inputs.src_dir && inputs.src_dir || '' }}
+      DST_DIR: ${{ inputs.dst_dir && inputs.dst_dir || '' }}
+    run: |
+      : generate outputs
+      echo "src_dir=$SRC_DIR" >>$GITHUB_OUTPUT
+      echo "dst_dir=$DST_DIR" >>$GITHUB_OUTPUT
+
+  - name: Generate Summary
+    id: gen-summary
+    shell: bash
+    env:
+      SRC_DIR: ${{ steps.gen-outputs.outputs.src_dir }}
+      DST_DIR: ${{ steps.gen-outputs.outputs.dst_dir }}
+    run: |
+      : generate summary
+      cat <<EOF >>$GITHUB_STEP_SUMMARY
+      #### ${{ github.action }} ${{ github.action_status }}
+      Paths
+      ~~~ text
+      SRC_DIR: $SRC_DIR
+      $(df -TPh "$SRC_DIR" | tail -n 1  | tr -s " " || echo "none")
+      DST_DIR: $DST_DIR
+      $(grep "upload:" $GITHUB_WORKSPACE/s3cmd.log | head)
+      ~~~
+      Statistics
+      ~~~ text
+      $(tail -n 2 $GITHUB_WORKSPACE/s3cmd.log)
+      ~~~
+      EOF
+      rm -f $GITHUB_WORKSPACE/s3cmd.log
