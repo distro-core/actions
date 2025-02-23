@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: MIT
+
+name: DISTRO Core Context Diagnostic
+author: Michael Mitchell <124963+mmitchel@users.noreply.github.com>
+description: >-
+  Action to perform a context dump.
+
+branding:
+  icon: activity
+  color: red
+
+########################################################################
+
+# inputs:
+
+# outputs:
+
+########################################################################
+
+runs:
+  using: composite
+  steps:
+
+  - id: environment
+    shell: bash
+    run: |
+      : environment based on runtime
+  - id: install-github-hosted
+    if: runner.environment == 'github-hosted'
+    shell: bash
+    run: |
+      : install github-hosted
+  - id: install-self-hosted
+    if: runner.environment == 'self-hosted'
+    shell: bash
+    run: |
+      : install self-hosted
+  - id: configure
+    shell: bash
+    run: |
+      : configure
+  - id: execute
+    shell: bash
+    run: |
+      : execute
+  - id: gen-outputs
+    shell: bash
+    run: |
+      : generate outputs
+  - id: gen-summary
+    shell: bash
+    if: always()
+    env:
+      CONTEXT_GITHUB: ${{ toJson(github) }}
+      CONTEXT_RUNNER: ${{ toJson(runner) }}
+      CONTEXT_ENV: ${{ toJson(env) }}
+      CONTEXT_JOB: ${{ toJson(job) }}
+      CONTEXT_INPUTS: ${{ toJson(inputs) }}
+    run: |
+      : generate summary
+      cat <<EOF >>$GITHUB_STEP_SUMMARY
+      #### Context Diagnostic
+      CONTEXT: github
+      ~~~ json
+      $CONTEXT_GITHUB
+      ~~~
+      CONTEXT: runner
+      ~~~ json
+      $CONTEXT_RUNNER
+      ~~~
+      EOF
