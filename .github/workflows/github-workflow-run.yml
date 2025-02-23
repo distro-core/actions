@@ -1,0 +1,120 @@
+# SPDX-License-Identifier: MIT
+
+name: Cloud Trigger Build/Fetch
+run-name: ${{ github.workflow }} ${{ github.event_name }} on ${{ github.ref_name && github.ref_name || github.ref }}
+
+# This workflow represents a specific configuration for a
+# single MACHINE as a specific design goal. It utilizes a
+# reusable workflow found at distro-core.
+
+# Secrets
+# secrets.ACTIONS_STEP_DEBUG                Repository
+# secrets.ACTIONS_GITHUB_TOKEN              Organization, GitHub PAT
+# secrets.AWS_ACCESS_KEY_ID                 Organization, S3 Access Key
+# secrets.AWS_SECRET_ACCESS_KEY             Organization, S3 Secret Key
+# secrets.AWS_ENDPOINT_URL                  Organization, S3 Endpoint Hostname
+
+# Self hosted runners have the prerequsite dependency to install the
+# host tools dependencies before workflow use.
+
+on:
+  # push:
+  #   branches:
+  #   - main
+  #   - release
+  #   - development
+  workflow_dispatch:
+    inputs:
+      chosen_os:
+        description: Select OS
+        type: choice
+        default: ubuntu-22.04
+        options:
+        - linux-amd64
+        - ubuntu-22.04
+      EXTRA_USER_CLASSES:
+        description: >-
+          USER_CLASSES:prepend
+        type: choice
+        default: none
+        options:
+        - none
+        - cve-check
+
+# Workflow concurrency for current repository; allows GitHub to cancel
+# other workflow in progres when identified by the group key.
+
+concurrency:
+  group: ${{ github.workflow_ref }}
+  cancel-in-progress: false
+
+# Workflow permissions for current repository; use the principle of
+# assigning the least necessary permissions required.
+
+permissions:
+  actions: write
+  contents: read
+
+########################################################################
+
+# Workflow environment initial state. The environment is utilized to
+# setup values used by job steps.
+
+env:
+  ACTIONS_STEP_DEBUG: ${{ secrets.ACTIONS_STEP_DEBUG }}
+  REPO_MANIFEST_URL: https://github.com/distro-core/distro-manifest.git
+  REPO_MANIFEST_NAME: ci-${{ github.ref_name && github.ref_name || github.ref }}-head.xml
+  REPO_MANIFEST_REF: ${{ github.ref_name && github.ref_name || github.ref }}
+  REPO_MANIFEST_LOCAL: >-
+    <extend-project name="meta-distro" revision="${{ github.ref_name && github.ref_name || github.ref }}" groups="default" />
+    <extend-project name="workflows-com-cexpress-bt" revision="${{ github.ref_name && github.ref_name || github.ref }}" groups="default" />
+    <extend-project name="workflows-com-cexpress-sl" revision="${{ github.ref_name && github.ref_name || github.ref }}" groups="default" />
+    <extend-project name="workflows-sbc-gene-bt05" revision="${{ github.ref_name && github.ref_name || github.ref }}" groups="default" />
+    <extend-project name="workflows-sbc-raspberrypi5" revision="${{ github.ref_name && github.ref_name || github.ref }}" groups="default" />
+    <extend-project name="workflows-wsl-amd64" revision="${{ github.ref_name && github.ref_name || github.ref }}" groups="default" />
+
+########################################################################
+
+jobs:
+
+  Run:
+    # Runner from github-hosted values, selected for bitbake
+    runs-on: ${{ inputs.chosen_os && inputs.chosen_os || 'ubuntu-22.04' }}
+    timeout-minutes: 1080
+    steps:
+
+    - name: Context dump for diagnostics
+      if: env.ACTIONS_STEP_DEBUG
+      uses: distro-core/actions/context@main
+
+    - name: Runner initialization
+      id: runner
+      uses: distro-core/actions/runner@main
+      with:
+        mnt_dl_dir:
+        mnt_sstate_dir:
+
+    # repo init, sync and manifest; the job creates the workspace
+    # contents and the .repo directory that are referenced in later.
+    # environment variables are set for the manifest and the repo.
+
+    - name: Repo Manifest Init/Sync
+      id: repo-manifest
+      uses: distro-core/actions/repo@main
+
+    - name: GitHub CLI Workflow Run
+      id: gh-cli-workflow-run
+      env:
+        GH_TOKEN: ${{ secrets.ACTIONS_GITHUB_TOKEN }}
+      run: |
+        repo forall -g workflows -c '
+        echo "### $REPO_PATH"
+        cd $REPO_PATH
+        gh workflow list
+        echo "### github-hosted-parse.yml ${{ github.ref_name && github.ref_name || github.ref }}"
+        gh workflow run github-hosted-parse.yml -r ${{ github.ref_name && github.ref_name || github.ref }} -f chosen_os=ubuntu-22.04 -f EXTRA_USER_CLASSES=none || echo "github-hosted-parse.yml retcode $?"
+        echo "### github-hosted-fetch.yml ${{ github.ref_name && github.ref_name || github.ref }}"
+        gh workflow run github-hosted-fetch.yml -r ${{ github.ref_name && github.ref_name || github.ref }} -f chosen_os=ubuntu-22.04 -f EXTRA_USER_CLASSES=none || echo "github-hosted-fetch.yml retcode $?"
+        echo "### github-hosted-build.yml ${{ github.ref_name && github.ref_name || github.ref }}"
+        gh workflow run github-hosted-build.yml -r ${{ github.ref_name && github.ref_name || github.ref }} -f chosen_os=ubuntu-22.04 -f EXTRA_USER_CLASSES=none || echo "github-hosted-build.yml retcode $?"
+        ' || echo "repo forall retcode $?"
